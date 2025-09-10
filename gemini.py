@@ -6,8 +6,7 @@ dotenv.load_dotenv()
 GEMINI_API_KEY = dotenv.get_key(dotenv.find_dotenv(), "GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-if __name__ == "__main__":
-    query = "Who led Week 1 in sacks?"
+def ask(query: str):
     results = retrieve(query)
     print("top relevant chunks: ", len(results))
 
@@ -27,5 +26,6 @@ if __name__ == "__main__":
     response = client.models.generate_content(
         model="gemini-2.5-flash", contents=prompt
     )
-    print(response.text)
+
+    return response.text
 
