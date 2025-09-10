@@ -3,15 +3,22 @@ import json
 import re
 import faiss
 import pandas as pd
+import dotenv
 from embed import embed_texts
 from pathlib import Path
 from typing import List
+from pinecone import Pinecone, ServerlessSpec
 
 DATA_DIR = Path("data")
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 100
 INDEX_PATH = "store/index.faiss"
 CHUNKS_PATH = "store/chunks.jsonl"
+
+dotenv.load_dotenv()
+INDEX_NAME = os.getenv("PINECONE_INDEX")
+PINECONE_CLOUD = os.getenv("PINECONE_CLOUD")
+PINECONE_REGION = os.getenv("PINECONE_REGION")
 
 """
 Return entire text of a .txt file as a string
@@ -63,8 +70,7 @@ if __name__ == "__main__":
     docs = load_docs(DATA_DIR)
     print(f"Loaded {len(docs)} docs")
 
-    all_chunks = [] # store chunk dicts
-
+    all_chunks = []
     # create chunks from all docs
     for d in docs:
         for ch in chunk(d["text"], CHUNK_SIZE, CHUNK_OVERLAP):
@@ -78,14 +84,34 @@ if __name__ == "__main__":
     print("shape of embeddings: ", X.shape)
     dim = X.shape[1] # length of an embedding vector
 
-    # create the FAISS index storage from the length of vector
-    index = faiss.IndexFlatIP(dim) # nearest neighbor search with inner product 
-    index.add(X)
-    faiss.write_index(index, str(INDEX_PATH))
-
-    # store embedded chunks to the JSONL file
+    # debug: store embedded chunks to the JSONL file
     with open(CHUNKS_PATH, "w", encoding="utf-8") as f:
         for c in all_chunks:
             f.write(json.dumps(c, ensure_ascii=False) + "\n")
 
-    print(f"Stored index with {index.ntotal} vectors to {INDEX_PATH}")
+    # upsert vectors to Pinecone
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    if INDEX_NAME not in pc.list_indexes().names():
+        pc.create_index(
+            name=INDEX_NAME,
+            dimension=X.shape[1], # MiniLM-L6-v2 dims are 384
+            metric="cosine",
+            spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION),
+        )
+    pindex = pc.Index(INDEX_NAME)
+
+    vectors = [
+        {
+            "id": c["chunk_id"],
+            "values": X[i].tolist(),
+            "metadata": {
+                "chunk_id": c["chunk_id"],
+                "text": c["text"],
+                "source": c.get("source", "unknown"),
+            },
+        }
+        for i, c in enumerate(all_chunks)
+    ]
+    pindex.upsert(vectors=vectors)
+
+    print(f"Upserted {len(all_chunks)} vectors to Pinecone index '{INDEX_NAME}'.")

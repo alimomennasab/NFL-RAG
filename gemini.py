@@ -1,9 +1,10 @@
+import os
 import dotenv
 from google import genai
 from embed import retrieve
 
 dotenv.load_dotenv()
-GEMINI_API_KEY = dotenv.get_key(dotenv.find_dotenv(), "GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 def ask(query: str):

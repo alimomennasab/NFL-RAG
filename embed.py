@@ -1,15 +1,23 @@
-import os, json
+import os
+import json
 from typing import List, Dict
 import faiss
 import numpy as np
+import dotenv
 from sentence_transformers import SentenceTransformer
+from pinecone import Pinecone, ServerlessSpec
 
 INDEX_PATH = "store/index.faiss"
 CHUNKS_PATH = "store/chunks.jsonl"
+dotenv.load_dotenv()
+INDEX_NAME = os.getenv("PINECONE_INDEX")
+PINECONE_CLOUD = os.getenv("PINECONE_CLOUD")
+PINECONE_REGION = os.getenv("PINECONE_REGION")
 TOP_K = 3
 llm = None
 index = None
 chunks = None
+pc = None
 
 """
 Function for loading the LLM from sentence transformers
@@ -21,23 +29,23 @@ def load_llm():
     return llm
 
 """
-Function for loading FAISS index
+Function for loading Pinecone index
 """
 def load_index():
-    global index
-    if index is None:
-        index = faiss.read_index(INDEX_PATH)
+    global pc, index
+    if index is not None:
+        return index
+    
+    pc = Pinecone(api_key=os.environ["PINECONE_API_KEY"])
+    if INDEX_NAME not in pc.list_indexes().names():
+        pc.create_index(
+            name=INDEX_NAME,
+            dimension=384,
+            metric="cosine",
+            spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION),
+        )
+    index = pc.Index(INDEX_NAME)
     return index
-
-"""
-Function for loading chunks from a JSONL file
-"""
-def load_chunks():
-    global chunks
-    if chunks is None:
-        with open(CHUNKS_PATH, "r", encoding="utf-8") as f:
-            chunks = [json.loads(line) for line in f]
-    return chunks
 
 """
 Function for embedding a list of text strings into vectors
@@ -50,15 +58,16 @@ def embed_texts(texts: List[str]):
 Function for retrieving the top k most relevant chunks for a query
 """
 def retrieve(query: str, k: int = TOP_K):
-    qv = embed_texts([query])
-    D, I = load_index().search(qv, k)
-    out: List[Dict] = []
-    chs = load_chunks()
-    for rank, (idx, score) in enumerate(zip(I[0], D[0])):
-        if idx < 0:
-            continue
-        item = dict(chs[idx])
-        item["rank"] = rank
-        item["score"] = float(score)
-        out.append(item)
+    index = load_index()
+    embedded_vector = embed_texts([query])[0].tolist()
+    res = index.query(vector=embedded_vector, top_k=k, include_metadata=True)
+
+    out = []
+    for rank, m in enumerate(res.matches):
+        out.append({
+            "chunk_id": m.id,
+            "text": m.metadata["text"],
+            "rank": rank,
+            "score": m.score,
+        })
     return out
